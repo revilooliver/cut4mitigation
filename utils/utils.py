@@ -1,0 +1,41 @@
+def total_counts(dictionary):
+    total = 0
+    for value in dictionary.values():
+        total += value
+    return total
+
+def filter_results(dictionary, indexes):
+    new_dict = {}
+    for key in dictionary.keys():
+        new_key = ''
+        for i in range(len(key)):
+            if i in indexes and key[i] == '1':
+                new_key = ''
+                break
+            if i not in indexes:
+                new_key += key[i]
+        if new_key != '':
+            new_dict[new_key] = dictionary[key]
+    return new_dict
+
+def dict_to_list(dictionary, size):
+    ret_list = []
+    total = total_counts(dictionary)
+    format_str = '{0:0' + str(size) + 'b}'
+    for i in range(0, 2 ** size):
+        binary = format_str.format(i)
+        try:
+            ret_list.append(dictionary[binary]/total)
+        except:
+            ret_list.append(0.0)
+    return ret_list
+
+def H_distance(p, q):
+    # distance between p an d
+    # p and q are np array probability distributions
+    n = len(p)
+    sum = 0.0
+    for i in range(n):
+        sum += (np.sqrt(p[i]) - np.sqrt(q[i]))**2
+    result = (1.0 / np.sqrt(2.0)) * np.sqrt(sum)
+    return result
