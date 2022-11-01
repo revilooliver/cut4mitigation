@@ -1,3 +1,5 @@
+import numpy as np
+
 def total_counts(dictionary):
     total = 0
     for value in dictionary.values():
@@ -30,6 +32,13 @@ def dict_to_list(dictionary, size):
             ret_list.append(0.0)
     return ret_list
 
+def norm_dict(dictionary):
+    total = total_counts(dictionary)
+    norm_dist = {}
+    for i in dictionary.keys():
+        norm_dist[i] = dictionary[i]/total
+    return norm_dist
+
 def H_distance(p, q):
     # distance between p an d
     # p and q are np array probability distributions
@@ -37,5 +46,14 @@ def H_distance(p, q):
     sum = 0.0
     for i in range(n):
         sum += (np.sqrt(p[i]) - np.sqrt(q[i]))**2
+    result = (1.0 / np.sqrt(2.0)) * np.sqrt(sum)
+    return result
+
+def H_distance_dict(p, q):
+    # distance between p an d
+    # p and q are np array probability distributions
+    sum = 0.0
+    for key in p.keys():
+        sum += (np.sqrt(p[key]) - np.sqrt(q[key]))**2
     result = (1.0 / np.sqrt(2.0)) * np.sqrt(sum)
     return result
