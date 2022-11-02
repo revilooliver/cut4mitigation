@@ -3,8 +3,11 @@
 # author: Michael A. Perlin (github.com/perlinm)
 
 import ast, itertools, numpy, scipy, qiskit, tensornetwork
+import qiskit.ignis.verification as verif
 from qiskit.tools import monitor
-from qiskit.ignis.verification import process_tomography_circuits
+from qiskit.providers.ibmq.managed import IBMQJobManager
+from qiskit import IBMQ, transpile
+
 
 prep_state_keys = { "Pauli" : [ "Zp", "Zm", "Xp", "Yp" ],
                     "SIC" : [ "S0", "S1", "S2", "S3" ] }
@@ -19,19 +22,31 @@ def get_statevector(circuit):
 
 # run circuits and get the resulting probability distributions
 def run_circuits(circuits, shots, backend = "qasm_simulator",
-                 max_hardware_shots = 8192, monitor_jobs = False):
+                 max_hardware_shots = 32000, monitor_jobs = False, initial_layout = None, optimization_level = 3, noise_model = None):
 
     # get results from a single run
-    def _results(shots, backend):
-        tomo_job = qiskit.execute(circuits, backend = backend, shots = shots)
-        if monitor_jobs: qiskit.tools.monitor.job_monitor(tomo_job)
-        return tomo_job.result()
+    def _results(circuits, shots, backend):
+        if len(circuits) > 300 and backend != "qasm_simulator":
+            #number of circuit exceeds the maximum size for a single run
+            job_manager = IBMQJobManager()
+            circuits = transpile(circuits, backend = backend, optimization_level = optimization_level)
+            tomo_job_set = job_manager.run(circuits, backend = backend, shots = shots, initial_layout = initial_layout, optimization_level = optimization_level, seed_transpiler = 0)
+            print("jobset_id: ", tomo_job_set.job_set_id())
+            return tomo_job_set.results()
+        else:
+            if noise_model is None:
+                tomo_job = qiskit.execute(circuits, backend = backend, shots = shots, initial_layout = initial_layout, optimization_level = optimization_level, seed_transpiler = 0)
+            else:
+                tomo_job = qiskit.execute(circuits, backend = backend, shots = shots, initial_layout = initial_layout, optimization_level = optimization_level, noise_model = noise_model, seed_transpile = 0)
+            if monitor_jobs: qiskit.tools.monitor.job_monitor(tomo_job)
+            print("job_id: ", tomo_job.job_id())
+            return tomo_job.result()
 
     if type(backend) is str:
         # if the backend is a string, simulate locally with a qiskit Aer backend
         backend = qiskit.Aer.get_backend(backend)
         backend._configuration.max_shots = shots
-        return [ _results(shots, backend) ]
+        return [ _results(circuits, shots, backend) ]
 
     else:
         # otherwise, we're presumably running on hardware,
@@ -40,7 +55,7 @@ def run_circuits(circuits, shots, backend = "qasm_simulator",
         shot_remainder = shots % max_hardware_shots
         shot_sequence = [ max_hardware_shots ] * max_shot_repeats \
                       + [ shot_remainder ] * ( shot_remainder > 0 )
-        return [ _results(shots, backend) for shots in shot_sequence ]
+        return [ _results(circuits, shots, backend) for shots in shot_sequence ]
 
 # convert a statevector into a density operator
 def to_projector(vector):
@@ -115,8 +130,8 @@ def identify_frag_targets(wire_path_map):
 
 # perform partial quantum tomography on a circuit and return the corresponding raw data
 def partial_tomography(circuit, prep_qubits, meas_qubits, shots, prep_basis,
-                       tomography_backend = "qasm_simulator", monitor_jobs = False):
-    if prep_qubits == None: perp_qubits = []
+                       tomography_backend = "qasm_simulator", monitor_jobs = False, initial_layout = None, opt_lvl = 3, extra_qc = None, noise_model = None):
+    if prep_qubits == None: prep_qubits = []
     if meas_qubits == None: meas_qubits = []
     if prep_qubits == "all": prep_qubits = circuit.qubits
     if meas_qubits == "all": meas_qubits = circuit.qubits
@@ -154,19 +169,22 @@ def partial_tomography(circuit, prep_qubits, meas_qubits, shots, prep_basis,
     full_meas_labels = list(map(_full_meas_label, meas_labels))
 
     # collect circuit variants for peforming tomography
-    tomo_circuits = process_tomography_circuits(circuit, circuit.qubits,
+    get_tomo_circuits = verif.tomography.process_tomography_circuits
+    tomo_circuits = get_tomo_circuits(circuit, circuit.qubits,
                                       prep_basis = prep_basis,
                                       prep_labels = full_prep_labels,
                                       meas_labels = full_meas_labels)
-
-    return run_circuits(tomo_circuits, shots, tomography_backend, monitor_jobs = monitor_jobs)
+    circuit_list = tomo_circuits
+    if extra_qc is not None:
+        circuit_list = tomo_circuits + extra_qc
+    return run_circuits(circuit_list, shots, tomography_backend, initial_layout = initial_layout, optimization_level = opt_lvl, monitor_jobs = monitor_jobs, noise_model = noise_model)
 
 # organize raw tomography data into a dictionary of dictionaries,
 #   mapping (1) bitstrings on the "final" qubits
 #       --> (2) prepared / measured state labels
 #       --> (3) observed counts, i.e.
 # { <final bitstring> : { <prepared_measured_states> : <counts> } }
-def organize_tomography_data(raw_data_collection, prep_qubits, meas_qubits, prep_basis):
+def organize_tomography_data(raw_data_collection, prep_qubits, meas_qubits, prep_basis, extra_qc):
     def _qubit_index(qubit):
         if type(qubit) is int: return qubit
         else: return qubit.index
@@ -184,7 +202,11 @@ def organize_tomography_data(raw_data_collection, prep_qubits, meas_qubits, prep
 
     organized_data = {}
     for raw_data in raw_data_collection:
-        for result in raw_data.results:
+        if len(extra_qc) == 0:
+            appending_size = None
+        else:
+            appending_size = -len(extra_qc)
+        for result in raw_data.results[0:appending_size]:
             name = result.header.name
             meas_counts = raw_data.get_counts(name)
             full_prep_label, full_meas_label = ast.literal_eval(name)
@@ -212,17 +234,65 @@ def organize_tomography_data(raw_data_collection, prep_qubits, meas_qubits, prep
 
     return organized_data
 
+
+
+# def organize_tomography_data(raw_data_collection, prep_qubits, meas_qubits, prep_basis):
+#     def _qubit_index(qubit):
+#         if type(qubit) is int: return qubit
+#         else: return qubit.index
+#     prep_qubits = list(map(_qubit_index, prep_qubits))
+#     meas_qubits = list(map(_qubit_index, meas_qubits))
+#
+#     # split a bitstring on all qubits into:
+#     #   (1) a bitstring on the "middle" qubits that are associated with a cut, and
+#     #   (2) a bitstring on the "final" qubits that are *not* associated with a cut
+#     def _split_bits(bits):
+#         mid_bits = "".join([ bits[len(bits)-idx-1] for idx in meas_qubits ])
+#         fin_bits = "".join([ bit for pos, bit in enumerate(bits)
+#                              if len(bits)-pos-1 not in meas_qubits ])
+#         return mid_bits, fin_bits
+#
+#     organized_data = {}
+#     for raw_data in raw_data_collection:
+#         for result in raw_data.results:
+#             name = result.header.name
+#             meas_counts = raw_data.get_counts(name)
+#             full_prep_label, full_meas_label = ast.literal_eval(name)
+#
+#             prep_label = tuple( full_prep_label[qubit] for qubit in prep_qubits )
+#             meas_label = tuple( full_meas_label[qubit] for qubit in meas_qubits )
+#             for bits, counts in meas_counts.items():
+#                 meas_bits, final_bits = _split_bits(bits)
+#                 meas_state = tuple( basis + ( "p" if outcome == "0" else "m" )
+#                                     for basis, outcome in zip(meas_label, meas_bits) )
+#                 count_label = ( prep_label, meas_state )
+#                 if final_bits not in organized_data:
+#                     organized_data[final_bits] = {}
+#                 organized_data[final_bits][count_label] = counts
+#
+#     # add zero count data for output strings with missing prep/meas combinations
+#     prep_labels = itertools.product(prep_state_keys[prep_basis], repeat = len(prep_qubits))
+#     meas_states = itertools.product(meas_state_keys["Pauli"], repeat = len(meas_qubits))
+#     count_labels = list(itertools.product(prep_labels, meas_states))
+#     for bits in organized_data.keys():
+#         if len(organized_data[bits]) == len(count_labels): continue
+#         for count_label in count_labels:
+#             if count_label not in organized_data[bits]:
+#                 organized_data[bits][count_label] = 0
+#
+#     return organized_data
+
 # perform process tomography on all fragments and return the corresponding data
 def collect_fragment_data(fragments, wire_path_map, shots,
                           tomography_backend = "qasm_simulator",
-                          prep_basis = "SIC", monitor_jobs = False):
+                          prep_basis = "SIC", monitor_jobs = True, initial_layout = None, opt_lvl = 3, extra_qc = None, noise_model = None):
     frag_targets = identify_frag_targets(wire_path_map)
     frag_raw_data = [ partial_tomography(fragment,
                                          frag_targets[idx].get("prep"),
                                          frag_targets[idx].get("meas"),
                                          shots = shots, prep_basis = prep_basis,
                                          tomography_backend = tomography_backend,
-                                         monitor_jobs = monitor_jobs)
+                                         monitor_jobs = monitor_jobs, initial_layout = initial_layout, opt_lvl = opt_lvl, extra_qc = extra_qc, noise_model = noise_model)
                       for idx, fragment in enumerate(fragments) ]
 
     return [ organize_tomography_data(raw_data,
@@ -231,20 +301,16 @@ def collect_fragment_data(fragments, wire_path_map, shots,
                                       prep_basis = prep_basis)
              for idx, raw_data in enumerate(frag_raw_data) ]
 
-# perform process tomography on fragments and return the unorganized
-# corresponding data
-def collect_raw_fragment_data(fragments, wire_path_map, shots,
+def collect_fragment_raw_data(fragment, idx, wire_path_map, shots,
                           tomography_backend = "qasm_simulator",
-                          prep_basis = "SIC", monitor_jobs = False):
+                          prep_basis = "SIC", monitor_jobs = True, initial_layout = None, opt_lvl = 3, extra_qc = None, noise_model = None):
     frag_targets = identify_frag_targets(wire_path_map)
     frag_raw_data = [ partial_tomography(fragment,
                                          frag_targets[idx].get("prep"),
                                          frag_targets[idx].get("meas"),
                                          shots = shots, prep_basis = prep_basis,
                                          tomography_backend = tomography_backend,
-                                         monitor_jobs = monitor_jobs)
-                      for idx, fragment in enumerate(fragments) ]
-
+                                         monitor_jobs = monitor_jobs, initial_layout = initial_layout, opt_lvl = opt_lvl, extra_qc = extra_qc, noise_model = noise_model)]
     return frag_raw_data
 
 ##########################################################################################
@@ -255,7 +321,7 @@ def collect_raw_fragment_data(fragments, wire_path_map, shots,
 def label_to_matrix(label):
     if label == "I": return numpy.eye(2)
 
-    bases = qiskit.ignis.verification.tomography.basis
+    bases = verif.tomography.basis
     if label[0] in [ "X", "Y", "Z" ]:
         matrix = bases.paulibasis.pauli_preparation_matrix
         if len(label) == 1:
