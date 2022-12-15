@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# author: Michael A. Perlin (github.com/perlinm)
+# author: Michael A. Perlin (github.com/perlinm), modified by Ji Liu (ji.liu@anl.gov)
 
 import retworkx as rx
 import qiskit as qs

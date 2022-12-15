@@ -1,3 +1,4 @@
+# author: Ji Liu (ji.liu@anl.gov)
 import numpy as np
 
 def total_counts(dictionary):
