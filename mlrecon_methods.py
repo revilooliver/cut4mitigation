@@ -26,11 +26,11 @@ def run_circuits(circuits, shots, backend = "qasm_simulator",
 
     # get results from a single run
     def _results(circuits, shots, backend):
-        if len(circuits) > 300 and backend != "qasm_simulator":
+        if len(circuits) > 300 and backend.name() != "qasm_simulator":
             #number of circuit exceeds the maximum size for a single run
             job_manager = IBMQJobManager()
-            circuits = transpile(circuits, backend = backend, optimization_level = optimization_level)
-            tomo_job_set = job_manager.run(circuits, backend = backend, shots = shots, initial_layout = initial_layout, optimization_level = optimization_level, seed_transpiler = 0)
+            circuits = transpile(circuits, backend = backend, optimization_level = optimization_level, seed_transpiler = 0)
+            tomo_job_set = job_manager.run(circuits, backend = backend, shots = shots)
             print("jobset_id: ", tomo_job_set.job_set_id())
             return tomo_job_set.results()
         else:
